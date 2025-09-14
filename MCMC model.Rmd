@@ -1,0 +1,291 @@
+---
+title: "MCMC model final"
+author: "Luca"
+date: "2024-12-27"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+
+
+# install.packages(c("coda", "dplyr", "ggplot2", "MCMCglmm", "tidyverse", "lubridate", "Metrics"))
+
+library(MCMCglmm)
+library(tidyverse)
+library(lubridate)
+library(Metrics)
+library(coda)      
+library(dplyr)     
+library(ggplot2)
+
+
+
+# 2) Load and Prepare the Data
+
+## 2.1 Read the Dataset
+housing <- read_csv("housing.csv")
+
+## 2.2 Data Cleaning & Feature Engineering
+# To fill in the values of the Council Area, each postal code was associated with a CouncilArea based on the data observed. For those postal codes that had more CouncilAreas the first observation was taken. Then the Council Areas of the observation that had missing values were left joined by using the postal code as key.
+
+postcode_to_council <- housing %>%
+  filter(!is.na(CouncilArea)) %>%
+  group_by(Postcode) %>%
+  summarise(CouncilArea = first(CouncilArea))
+
+housing <- housing %>%
+  left_join(postcode_to_council, by = "Postcode", suffix = c("", "_mapped")) %>%
+  mutate(CouncilArea = if_else(is.na(CouncilArea), CouncilArea_mapped, CouncilArea)) %>%
+  select(-CouncilArea_mapped)
+
+# 3 observations still have missing values for Council Area. As their number is irrelevant these observations will be removed
+housing <- housing %>% drop_na(CouncilArea)
+
+#Remove outliers from Price using IQR rule.
+remove_outliers <- function(data, column) {
+  Q1 <- quantile(data[[column]], 0.25, na.rm = TRUE)
+  Q3 <- quantile(data[[column]], 0.75, na.rm = TRUE)
+  IQR_value <- Q3 - Q1
+  lower_bound <- Q1 - 1.5 * IQR_value
+  upper_bound <- Q3 + 1.5 * IQR_value
+  
+  data %>%
+    filter(data[[column]] >= lower_bound & data[[column]] <= upper_bound)
+}
+
+housing <- remove_outliers(housing, "Price")
+
+# Convert Date and create Year, Month variables
+housing <- housing %>%
+  mutate(
+    Date = as.Date(Date, format = "%d/%m/%Y"),
+    Date = ymd(Date),
+    Year = year(Date),
+    Month = month(Date)
+  )
+
+
+# Convert Method to factor
+housing$Method <- as.factor(housing$Method)
+
+# Handle other missing values and add Seasonality
+housing <- housing %>%
+  mutate(
+    # Impute missing numerical features with medians
+    Car = if_else(is.na(Car), median(Car, na.rm = TRUE), Car),
+    YearBuilt = if_else(is.na(YearBuilt), median(YearBuilt, na.rm = TRUE), YearBuilt),
+    
+    # Seasonality (cyclical feature)
+    Seasonality = cos(2 * pi * Month / 12) + sin(2 * pi * Month / 12),
+    
+    # Convert to factor for random effects
+    CouncilArea = factor(CouncilArea),
+    Regionname = factor(Regionname),
+    Month = factor(Month),
+    Type = factor(Type)
+  )
+
+# Create log-Price
+housing <- housing %>% mutate(LogPrice = log(Price))
+
+# Split into Train and Test sets. 80-20 split was used.
+set.seed(123)
+train_idx <- sample(nrow(housing), size = 0.8 * nrow(housing))
+housing_train <- housing[train_idx, ]
+housing_test  <- housing[-train_idx, ]
+
+
+# 3) Define and Run the  Model
+
+
+# Define the fixed effect formula, including all the relevant variables and interaction terms.
+mcmc_formula <- LogPrice ~ 
+  Rooms * Type +
+  Car * Distance +
+  Seasonality + 
+  YearBuilt + 
+  Method
+
+# Define the formula for the random effects.
+random_formula <- ~ CouncilArea + Regionname + Month
+
+# Here the different priors were specified. 
+my_priors <- list(
+  B = list(
+    mu = rep(0, 15),            # prior mean for each fixed effect
+    V  = diag(15) * 100         # large variance => weak prior
+  ),
+  R = list(                     # residual variance
+    V  = 1,
+    nu = 0.002
+  ),
+  G = list(
+    list(V = 1, nu = 0.002),    # CouncilArea
+    list(V = 1, nu = 0.002),    # Regionname
+    list(V = 1, nu = 0.002)     # Month
+  )
+)
+
+# Run the model
+mcmc_model <- MCMCglmm(
+  fixed   = mcmc_formula,
+  random  = random_formula,
+  data    = housing_train,
+  family  = "gaussian",
+  pr      = TRUE,
+  prior   = my_priors,
+  nitt    = 50000,  # total MCMC iterations
+  burnin  = 10000,  # burn-in
+  thin    = 20,     # thinning
+  verbose = FALSE   # suppress console output
+)
+
+
+
+summary(mcmc_model$Sol)
+
+
+# 4) Prediction on the Test Set
+
+# Extract posterior means of random effects
+Council_effects <- colMeans(mcmc_model$Sol[, grepl("CouncilArea", colnames(mcmc_model$Sol))])
+region_effects  <- colMeans(mcmc_model$Sol[, grepl("Regionname", colnames(mcmc_model$Sol))])
+month_effects   <- colMeans(mcmc_model$Sol[, grepl("Month", colnames(mcmc_model$Sol))])
+
+# Map test data levels to training levels
+# Create index columns that match factor levels in the training set
+housing_test <- housing_test %>%
+  mutate(
+    Council_idx = as.numeric(factor(CouncilArea, levels = levels(housing_train$CouncilArea))),
+    Region_idx  = as.numeric(factor(Regionname,  levels = levels(housing_train$Regionname))),
+    Month_idx   = as.numeric(factor(Month,       levels = levels(housing_train$Month)))
+  )
+
+# If the index is valid and the effect exists, use it, otherwise use 0
+housing_test <- housing_test %>%
+  mutate(
+    Council_effect = ifelse(!is.na(Council_idx) & !is.na(Council_effects[Council_idx]), Council_effects[Council_idx], 0),
+    Region_effect  = ifelse(!is.na(Region_idx)  & !is.na(region_effects[Region_idx]),   region_effects[Region_idx],  0),
+    Month_effect   = ifelse(!is.na(Month_idx)   & !is.na(month_effects[Month_idx]),     month_effects[Month_idx],    0)
+  )
+
+# Predict fixed effects on Log Scale
+fixed_predictions        = predict(mcmc_model, newdata = housing_test, type = "response")
+
+# Add random effects to the fixed effects predictions
+housing_test$pred_log    = fixed_predictions +
+                           housing_test$Council_effect +
+                           housing_test$Region_effect +
+                           housing_test$Month_effect
+
+# Convert Log-Scale Predictions to Original Price Scale
+housing_test$pred_price  = exp(housing_test$pred_log)
+
+# Drop any rows with missing predictions
+housing_test <- housing_test %>% drop_na(pred_log)
+
+
+
+# 5) Evaluate Model Performance
+
+
+# RMSE on Log Scale
+rmse_log <- rmse(housing_test$LogPrice, housing_test$pred_log)
+cat("RMSE (log-scale):", rmse_log, "\n")
+
+# RMSE and MAE on Price Scale
+rmse_price <- rmse(housing_test$Price, housing_test$pred_price)
+mae_price  <- mean(abs(housing_test$Price - housing_test$pred_price))
+
+cat("RMSE (price-scale):", rmse_price, "\n")
+cat("MAE (price-scale):", mae_price, "\n")
+
+# Residual Variance
+residual_variances <- mcmc_model$VCV[, "units"]
+sigma <- sqrt(mean(residual_variances))
+cat("sigma", sigma, "\n")
+
+
+# Compute Confidence Intervals for the coefficients 
+
+all_params <- as.data.frame(as.mcmc(mcmc_model$Sol))
+
+samples <- all_params %>%
+  select(-matches("CouncilArea|Regionname|Month"))
+
+
+# Convert to an 'mcmc' object
+samples <- as.mcmc(samples)
+
+# Posterior means
+posterior_means <- colMeans(samples)
+
+# Compute 95% HPD intervals
+hpd_95 <- HPDinterval(samples, prob = 0.95)
+
+# Combine into a data frame
+param_summary <- data.frame(
+  Parameter = colnames(samples),
+  Mean      = posterior_means,
+  Lower95   = hpd_95[, 1],
+  Upper95   = hpd_95[, 2]
+)
+
+param_summary
+
+# Here a Caterpillar Plot for Council Area was created
+
+# Identify columns for CouncilArea random effects
+council_cols <- grep("^CouncilArea", colnames(mcmc_model$Sol))
+
+# Extract those columns as an MCMC object
+council_samples <- as.mcmc(mcmc_model$Sol[, council_cols])
+
+# Compute posterior means
+council_mean <- colMeans(council_samples)
+
+# Compute 95% HPD intervals
+council_hpd <- HPDinterval(council_samples, prob = 0.95)
+
+# Combine into a summary data frame
+council_summary <- data.frame(
+  Level = colnames(council_samples),   # e.g. CouncilAreaA, CouncilAreaB, ...
+  Mean  = council_mean,
+  Lower = council_hpd[, "lower"],
+  Upper = council_hpd[, "upper"]
+)
+
+head(council_summary)
+
+
+# Sort levels by their posterior mean
+council_summary <- council_summary %>%
+  arrange(Mean) %>%
+  mutate(Level = factor(Level, levels = Level)) 
+
+# Plot the data
+ggplot(council_summary, aes(x = Level, y = Mean, ymin = Lower, ymax = Upper)) +
+  geom_pointrange() +
+  coord_flip() +
+  theme_minimal() +
+  labs(
+    title = "Caterpillar Plot for CouncilArea Random Effects",
+    x = "CouncilArea Levels",
+    y = "Random Intercept (Posterior Mean & 95% HPD)"
+  )
+
+mean_council_area <- mean(mcmc_model$VCV[, "CouncilArea"])
+mean_regionname <- mean(mcmc_model$VCV[, "Regionname"])
+mean_month <- mean(mcmc_model$VCV[, "Month"])
+
+
+cat("Mean for CouncilArea:", mean_council_area, "\n")
+cat("Mean for Regionname:", mean_regionname, "\n")
+cat("Mean for Month:", mean_month, "\n")
+
+```
+
