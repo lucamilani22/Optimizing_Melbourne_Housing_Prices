@@ -54,13 +54,11 @@ Housing affordability and variability in Melbourne are influenced by property ch
 
 ### Modeling  
 - **Likelihood (log price):**  
-  \[
-  \text{LogPrice}_i \sim \mathcal{N}(\mu_i, \sigma^2)
-  \]  
+  LogPrice_i ~ Normal(μ_i, σ²)  
+
 - **Linear predictor:**  
-  \[
-  \mu_{ij} = \beta_0 + \sum_k \beta_k X_{ijk} + u_{\text{CouncilArea}} + u_{\text{Region}} + u_{\text{Month}}
-  \]  
+  μ_ij = β₀ + Σ βₖ X_ijk + u_CouncilArea + u_Region + u_Month
+
 - **Fixed effects:** Rooms, Car, Distance (CBD), Seasonality, YearBuilt, Method, interactions.  
 - **Random effects:** Council area, region, month.  
 - **Priors:** Weakly-informative Normals for \(\beta\); Inverse-Gamma for variances.  
