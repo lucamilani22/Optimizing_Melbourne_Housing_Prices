@@ -4,7 +4,6 @@ This repository contains the code, analysis, and report developed as part of the
 
 **Project Title:** Bayesian Hierarchical Modeling for Melbourne Housing Prices
 
----
 
 ## Project Overview  
 
@@ -16,7 +15,6 @@ Housing affordability and variability in Melbourne are influenced by property ch
 - Hierarchical Bayesian modeling using MCMC methods, including fixed and random effects.  
 - Model evaluation with predictive performance metrics (RMSE, MAE).  
 
----
 
 ## Key Findings  
 
@@ -26,7 +24,6 @@ Housing affordability and variability in Melbourne are influenced by property ch
 - **Temporal trends:** Seasonal patterns in both prices and transaction volumes (captured via month effects).  
 - **Performance:** RMSE = **0.234** on the log scale; MAE ≈ **$177,196** on the price scale, indicating robust predictive power.  
 
----
 
 ## Repository Structure  
 
@@ -42,7 +39,6 @@ Housing affordability and variability in Melbourne are influenced by property ch
 - **housing.csv**  
   Dataset provided as part of the assignment
 
----
 
 ## Methods Summary  
 
@@ -68,15 +64,18 @@ Housing affordability and variability in Melbourne are influenced by property ch
 - **Gibbs** updates for random effects and variance components.  
 - Typical run: 50,000 iterations, 10,000 burn-in, thinning every 20.  
 
----
 
 ## Reproducibility  
 
 - **Software:** R (≥ 4.2)  
-- **Key packages:** `tidyverse`, `data.table`, `lme4`, `coda`, `ggplot2`  
+- **Key packages:** `tidyverse`, `data.table`, `lme4`, `coda`, `ggplot2`
 
-To knit this README for GitHub:  
+## Authors
+- Caretti Giorgio Filippo
+- Lorenzana Luca Garcia
+- Milani Luca
+- Muraro Margherita
 
-```r
-# install.packages(c("rmarkdown","knitr"))
-rmarkdown::render("README.Rmd")
+## Contacts
+For any inquiries, please contact:
+- luca.milani2@studbocconi.it
